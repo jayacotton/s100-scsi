@@ -10,7 +10,8 @@ git clone https://github.com/joelang/z80-sbc.git
 ```
 
 I will be including the prebuilt code for those that do not want to learn how to run
-z88dk.  It's called SCSITEST.COM 
+z88dk.  It's called SCSITEST.COM It is not standalone you need to run in under cp/m
+we can change this latter if needed.
 
 ##TO BUILD z88dk
 ```
