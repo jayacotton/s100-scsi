@@ -7,10 +7,12 @@
 
 
 	R - Read a block from the disk.  
-		needs Q,L first
+		needs I,Q,L first
 	W - Write a block to the disk.
-		needs Q,L and C first
+		needs I,Q,L and C first
 	L - Compute the LBA for the disk I/O operation.
+		this converts track/sector/head into LBN
+		LBN is logical block number.
 	C - Create a block of data for the W command
 	S - Read and decode the Controller and Disk status.
 	P - Peek at the register set.
@@ -21,8 +23,21 @@
 	B - Boot the CPMLOADER from the disk.
 	G - Go to the CPMLOADER
 	H - Print help banner
+	V - Write the test sector to LBN 1
+		read the test sector back into
+		buffer b.  Compair the buffers
+		point out errors and repeat
+		until control c.
+	D - Dump memory in hex and ascii.
+		special cases buffa, buffb 
+		are recognized and process.
+		keyword loader is also recognized
+		an processed.  Any hex address will
+		also require a size in bytes as a decimal.
 
  08/17/25  JCotton Started coding the first version.
+ 08/19/25  JCotton Added the hex dump funcion.
+ 08/20/25  JCotton Added write/readback and compair buffers
 
 
 
@@ -47,6 +62,7 @@ and run it.
 #include <string.h>
 #include <sys/types.h>
 #include <ctype.h>
+#include <conio.h>
 
 #include "scsi.h"
 
@@ -58,19 +74,46 @@ extern void dumpstat ();
 unsigned int msg_in;
 unsigned int msg_out;
 unsigned int scsistat;
-unsigned char buffa[128];
-unsigned char buffb[128];
+unsigned char buffa[512];
+unsigned char buffb[512];
 unsigned char bits[8] = { 0x80, 0x40, 0x20, 0x10, 8, 4, 2, 1 };
 unsigned char swapbits[8] = { 0, 4, 2, 6, 1, 5, 3, 7 };
 CDB CmdDesc = { 8, 0, 1, 13, 0 };
 SIOT ScsiIO =
   { 0, 0, &CmdDesc, &scsistat, &buffa, &buffb, &msg_in, &msg_out };
+
+void
+HexBytes (unsigned char *ptr, int n, int style)
+{
+  int i;
+// ingnore style for now
+  printf ("\n");
+  do
+    {
+      printf ("%04x ", (int) ptr);
+      n -= 16;
+      for (i = 0; i < 16; i++)
+	{
+	  printf ("%02x ", ptr[i]);
+	}
+      printf ("  \"");
+      for (i = 0; i < 16; i++)
+	{
+	  printf ("%c ", isprint (ptr[i]) ? ptr[i] : '.');
+	}
+      printf ("\"\n");
+      ptr += 16;
+    }
+  while (n > 0);
+  printf ("\n");
+}
+
 unsigned char
 DecodePhase (status)
 {
   unsigned char phase;
 
-  phase = swapbits[status & 7];
+  phase = swapbits[(status >> 2) & 7];
   printf ("Phase: ");
   switch (phase)
     {
@@ -132,6 +175,7 @@ help ()
 {
   printf ("\n\n BOOT 	- Boot the CPMLOADER from the disk.\n");
   printf (" CREATE - Create a block of data for the W command\n");
+  printf (" DUMP	- Print memory from starting address\n");
   printf (" GOTO 	- Go to the CPMLOADER\n");
   printf (" HELP 	- Print help banner.\n");
   printf (" INIT 	- Initialize the Controller.\n");
@@ -141,6 +185,8 @@ help ()
   printf (" QUEUE 	- Setup the disk for I/O.\n");
   printf (" READ 	- Read a block from the disk.\n");
   printf (" STATUS - Read and decode the Controller and Disk status.\n");
+  printf
+    (" VERIFY 	- Write buffa to disk, read back buffb and compair\n");
   printf (" WRITE 	- Write a block to the disk.\n");
   printf (" X 	- Leave program\n");
 }
@@ -149,7 +195,7 @@ int IOphase;
 
 
 // read a block of data from the disk.  The block size for
-// CP/M is 128 bytes (could be 512 latter).
+// CP/M is 128 bytes buffered to 512 to fit sector size .
 
 // The read routine will loop reading bytes and checking the phase
 // Note that this is recursive and may cause a stack over flow.
@@ -193,6 +239,39 @@ s_read (void *ptr)
 void
 s_write (void *ptr)
 {
+  outp (sr_icr, 1);
+// wait for req while checking busy
+s_wwreq:
+  do
+    {
+      scsistat = inp (sr_csbs);
+      if (scsistat & sm_req)
+	{
+	  // request
+	  goto s_wnxt;
+	}
+    }
+  while (!(scsistat & sm_bsy));
+  ScsiPhase ();
+  return;
+s_wnxt:
+// request active, check phase
+  if (inp (sr_bsr) & sm_phm)
+    {
+      ScsiPhase ();
+      return;
+    }
+// request active and phase match
+  outp (sr_odr, *ptr++);
+  outp (sr_icr, 0x11);
+// wait for request to drop
+  do
+    {
+      scsistat = inp (sr_csbs);
+    }
+  while (!(scsistat & sm_req));
+  outp (sr_icr, 1);
+  goto s_wwreq;
 }
 
 void
@@ -206,7 +285,7 @@ ScsiPhase ()
 	return;
     }
   while (scsistat & sm_req);
-  IOphase = swapbits[scsistat & 7];
+  IOphase = swapbits[(scsistat >> 2) & 7];
   switch (IOphase)
     {
     case 0:
@@ -247,7 +326,7 @@ boot ()
 
   CmdDesc.readcmd = 8;
   CmdDesc.lun = 0;
-  CmdDesc.lbn = 0x100;
+  CmdDesc.lbn = 1;
   CmdDesc.nrsects = 13;
 
   ScsiIO.btdrv = 2;
@@ -279,13 +358,82 @@ further notice */
 }
 
 void
+dump ()
+{
+  char text[80];
+  unsigned int t;
+  unsigned int s;
+  int n;
+
+  // special case, buffa or buffb
+  // get start address
+  printf ("\nEnter dump start address:");
+  gets (text);
+  n = strcasecmp (text, "buffa");
+  if (n == 0)
+    {
+      HexBytes (buffa, 512, 0);
+      return;
+    }
+  n = strcasecmp (text, "buffb");
+  if (n == 0)
+    {
+      HexBytes (buffb, 512, 0);
+      return;
+    }
+  n = strcasecmp (text, "loader");
+  if (n == 0)
+    {
+      HexBytes (0x8000, 13 * 128, 0);
+      return;
+    }
+  sscanf (text, "%x\n", &t);
+  // get size to dump
+  printf ("\nEnter dump size in bytes:");
+  gets (text);
+  sscanf (text, "%d\n", &s);
+  HexBytes (t, s, 0);
+
+}
+
+void
 mkblock ()
 {
   int i;
-  for (i = 0; i < 128; i++)
+  for (i = 0; i < 512; i++)
     {
       buffa[i] = i;
     }
+}
+
+// compair buffa to buffb and show diffence
+int
+compair (char *p1, char *p2, int size)
+{
+  if (!memcmp (p1, p2, size))
+    {
+      printf ("Match\n");
+      return (0);
+    }
+  else
+    {
+    printf ("No Match\n");
+    }
+// now code the work of finding the diff
+  return (1);
+}
+
+void
+verify ()
+{
+  do
+    {
+      mkblock ();
+      s_write (buffa);
+      s_read (buffb);
+      compair (buffa, buffb, 512);
+    }
+  while (kbhit () == 0);
 }
 
 void
@@ -395,7 +543,6 @@ main ()
 {
   printf ("%s %s\n", STARTSTRING, VERSION);
   help ();
-
 /* read console bytes and switch on first character for a command */
   while (1)
     {
@@ -409,6 +556,11 @@ main ()
 	case 'C':		/* Create a block of data for the W command */
 	  {
 	    mkblock ();
+	    break;
+	  }
+	case 'D':
+	  {
+	    dump ();
 	    break;
 	  }
 	case 'G':		/* Go to the CPMLOADER */
@@ -456,16 +608,22 @@ main ()
 	    dumpstat ();
 	    break;
 	  }
+	case 'V':
+	  {
+	    verify ();
+	    break;
+	  }
 	case 'W':		/* Write a block to the disk. */
 	  {
 	    writeblk ();
 	    break;
 	  }
 	case 'X':		/* Leave program */
-	default:
 	  {
-		exit(0);
+	    exit (0);
 	  }
+	default:
+	  break;
 	}
     }
 }
