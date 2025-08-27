@@ -38,7 +38,7 @@
  08/17/25  JCotton Started coding the first version.
  08/19/25  JCotton Added the hex dump funcion.
  08/20/25  JCotton Added write/readback and compair buffers
-
+ 08/26/25  JCotton add parameterized i/o address.
 
 
 Build instructions.
@@ -68,6 +68,21 @@ and run it.
 
 #define STARTSTRING "SCSI test version\0"
 #define VERSION "0.1\0"
+
+unsigned char sr_csd;		// scsi
+unsigned char sr_icr;		// scsi+1
+unsigned char sr_mr;		// scsi+2
+unsigned char sr_tcr;		// scsi+3
+unsigned char sr_csbs;		// scsi+4
+unsigned char sr_bsr;		//scsi+5
+unsigned char sr_idr;		// scsi+6
+unsigned char sr_rpi;		//scsi+7
+//ncr 5380 output only registers
+unsigned char sr_odr;		// scsi
+unsigned char sr_ser;		// scsi+4
+unsigned char sr_sds;		// scsi+5
+unsigned char sr_sdtr;		//scsi+6
+unsigned char sr_sdir;		//scsi+7
 
 extern void ScsiPhase ();
 extern void dumpstat ();
@@ -362,7 +377,7 @@ dump ()
 {
   char text[80];
   unsigned int t;
-  unsigned int s;
+  unsigned long s;
   int n;
 
   // special case, buffa or buffb
@@ -391,7 +406,7 @@ dump ()
   // get size to dump
   printf ("\nEnter dump size in bytes:");
   gets (text);
-  sscanf (text, "%d\n", &s);
+  sscanf (text, "%ld\n", &s);
   HexBytes (t, s, 0);
 
 }
@@ -417,7 +432,7 @@ compair (char *p1, char *p2, int size)
     }
   else
     {
-    printf ("No Match\n");
+      printf ("No Match\n");
     }
 // now code the work of finding the diff
   return (1);
@@ -541,7 +556,20 @@ writeblk ()
 void
 main ()
 {
+  char text[20];
   printf ("%s %s\n", STARTSTRING, VERSION);
+  printf ("\n\nEnter the base address for the SCSI board:");
+  gets (text);
+  sscanf (text, "%x\n", &sr_csd);
+
+  sr_odr = sr_csd;
+  sr_icr = sr_csd + 1;
+  sr_mr = sr_csd + 2;
+  sr_tcr = sr_csd + 3;
+  sr_csbs = sr_ser = sr_csd + 4;
+  sr_bsr = sr_sds = sr_csd + 5;
+  sr_idr = sr_sdtr = sr_csd + 6;
+  sr_rpi = sr_sdir = sr_csd + 7;
   help ();
 /* read console bytes and switch on first character for a command */
   while (1)

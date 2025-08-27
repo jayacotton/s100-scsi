@@ -10,6 +10,7 @@
 #define uart    0x80
 #define scsi    0x88
 //ncr 5380 i/o registers
+#ifdef NOT_NOW
 #define sr_csd  scsi
 #define sr_icr  scsi+1
 #define sr_mr   scsi+2
@@ -24,6 +25,7 @@
 #define sr_sds  scsi+5
 #define sr_sdtr scsi+6
 #define sr_sdir scsi+7
+#endif
 //current bus status bit masks
 #define sm_rst  0x80     //reset
 #define sm_bsy  0x40     //busy
